@@ -1,0 +1,46 @@
+# Helm values for the local TrustLoop dev deployment of OpenFGA.
+#
+# Chart: openfga/openfga, pinned version 0.3.10 (app version v1.18.1) -- see
+# hack/openfga/setup.sh, which is the single documented entrypoint that adds
+# the repo and installs this chart at that exact version. Never install
+# "latest": a chart bump could silently change defaults (replica count,
+# datastore engine, probe timing) underneath a script nobody re-reads before
+# running.
+#
+# This is Phase 0 scope only -- get OpenFGA running locally, repeatably, so
+# the authorization model in model.fga can be loaded and checked against. It
+# is deliberately NOT production config:
+
+# The chart defaults to a 3-replica Deployment. That's fine with a shared
+# external datastore (Postgres/MySQL), but we're intentionally using the
+# in-memory engine below for zero external dependencies in local dev -- and
+# each replica's in-memory store is independent (nothing is shared between
+# pods). With 3 replicas, a store/model/tuple written to whichever pod
+# happens to receive that request would be invisible to Check calls that
+# land on a different pod, since Kubernetes Services load-balance across
+# replicas. That would make cmd/openfga-verify flaky (fails or passes
+# depending on which pod each request happens to hit) rather than reliably
+# correct. One replica keeps "one API endpoint = one store of truth" true,
+# matching what the old docker-compose setup gave us for free with a single
+# container. A later phase can move to a real datastore + multiple replicas
+# once state needs to survive pod restarts.
+replicaCount: 1
+
+datastore:
+  # In-memory datastore (OpenFGA's default): all stores, models, and tuples
+  # are lost when the pod restarts. That's fine for local dev/CI where
+  # hack/openfga/setup.sh (via cmd/openfga-verify) recreates the model and
+  # test tuples from scratch on every run -- same tradeoff the old
+  # docker-compose.yml made, just enforced by the chart now instead of a
+  # container image default.
+  engine: memory
+
+# No auth in front of the OpenFGA API itself -- authn.method is left unset
+# (the chart's default). Never point this values file at anything but a
+# local port-forward to localhost; it has no business being reachable from
+# outside this machine.
+
+playground:
+  # Handy for poking at the model in a browser during development, same as
+  # the old docker-compose setup exposed on port 3000.
+  enabled: true

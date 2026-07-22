@@ -1,0 +1,42 @@
+# TrustLoop Phase 0 authorization model.
+#
+# Minimal model per ROADMAP.md Phase 0 / issue #2:
+#   User  -> can_act_on_behalf_of -> Agent
+#   Agent -> can_call             -> Tool
+#
+# Read as OpenFGA tuples (subject, relation, object):
+#   (user:alice,  can_act_on_behalf_of, agent:agent1) means
+#     "user alice is permitted to act on behalf of agent1" -- i.e. alice
+#     has delegated to agent1 / agent1 is authorized to represent alice.
+#     This is OpenFGA's documented pattern for modeling AI agent delegation:
+#     the grant is an explicit, revocable relationship tuple, never a copied
+#     credential. Deleting the tuple revokes the delegation immediately.
+#   (agent:agent1, can_call, tool:search) means
+#     "agent1 is permitted to invoke the search tool".
+#
+# This is intentionally the smallest possible model: two independent
+# relations, no computed/derived permissions yet (e.g. we are NOT yet
+# expressing "can user X reach tool Y via some agent" as a single check --
+# that composition is Phase 1+ work once the enforcement gateway exists and
+# needs it). Keeping Phase 0 to exactly what the ticket asks for avoids
+# baking in assumptions before the gateway's real requirements are known.
+model
+  schema 1.1
+
+type user
+  # No relations of its own in this model -- "user" only ever appears as the
+  # subject of an agent's can_act_on_behalf_of relation.
+
+type agent
+  relations
+    # Which users are allowed to act on behalf of this agent (i.e. have
+    # delegated authority to it). Direct assignment only -- no inheritance --
+    # because delegation must be explicit and auditable, never implicit.
+    define can_act_on_behalf_of: [user]
+
+type tool
+  relations
+    # Which agents are allowed to invoke this tool. Direct assignment only,
+    # same reasoning as above: every permission must trace back to an
+    # explicit, revocable tuple, not a rule that grants access implicitly.
+    define can_call: [agent]
