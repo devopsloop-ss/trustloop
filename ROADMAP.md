@@ -10,7 +10,7 @@
 ## Phase 0 — Environment
 
 - [ ] SPIRE server + agent running locally on a k3d cluster (matching Topoloop's local target), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
-- [ ] OpenFGA running locally on the same k3d cluster, installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
+- [x] OpenFGA running locally on a k3d cluster (`trustloop-dev`), installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
 - **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts
 
 ## Phase 1 — MVP: one enforced tool call, standalone

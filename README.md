@@ -24,4 +24,39 @@ The genuinely new work here is the **integration**: a thin enforcement gateway s
 
 ## Status
 
-Nothing runnable yet — this repo currently holds the plan. Follow [ROADMAP.md](ROADMAP.md) for MVP progress.
+Phase 0 is underway. Follow [ROADMAP.md](ROADMAP.md) for MVP progress.
+
+### Local OpenFGA (Phase 0)
+
+OpenFGA is the authorization engine for the `User -> can_act_on_behalf_of -> Agent`
+and `Agent -> can_call -> Tool` delegation model (see [ROADMAP.md](ROADMAP.md)).
+This repo does not implement authorization itself — see [CLAUDE.md](CLAUDE.md).
+
+Requires `k3d`, `helm`, and `kubectl` locally (matching Topoloop's local dev
+target — see [CLAUDE.md](CLAUDE.md)). Bring OpenFGA up on a local k3d
+cluster, load the model, and verify it behaves correctly (one command):
+
+```sh
+hack/openfga/setup.sh
+```
+
+This:
+
+1. Creates a local k3d cluster named `trustloop-dev` if one doesn't already exist (reuses it if it does).
+2. Installs OpenFGA via its official Helm chart ([deploy/openfga/values.yaml](deploy/openfga/values.yaml) pins the chart to a specific version — see that file for why, and why `replicaCount: 1` matters with the in-memory datastore).
+3. Port-forwards the OpenFGA HTTP API to `localhost:8080`.
+4. Runs [cmd/openfga-verify](cmd/openfga-verify) which:
+   - Finds-or-creates an OpenFGA store (`trustloop-dev`).
+   - Loads [deploy/openfga/model.fga](deploy/openfga/model.fga) — the DSL source of truth for the model — as a new authorization model version.
+   - Writes a couple of test tuples: one granted delegation, one granted tool call.
+   - Runs `Check` calls for both a granted and an ungranted case per relation, and reports PASS/FAIL against what's expected — this is the actual verification, not just "the server started."
+
+The script and the `openfga-verify` program are both safe to re-run — the
+cluster, Helm release, store, and model are all found-or-created/upgraded in
+place, and duplicate tuple writes are ignored.
+
+Tear it down with:
+
+```sh
+k3d cluster delete trustloop-dev
+```
