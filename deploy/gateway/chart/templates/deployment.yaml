@@ -33,6 +33,14 @@ spec:
             # SPIFFE_ENDPOINT_SOCKET env var default) so it's visible right
             # here what this container actually talks to.
             - -workload-api-socket=unix:///spiffe-workload-api/spire-agent.sock
+            # issue #4: real OpenFGA Check call gating every request. The
+            # in-cluster Service DNS name (openfga's own chart -- see
+            # deploy/openfga/values.yaml -- installs it as Service "openfga"
+            # in namespace "openfga"), not localhost:8080 -- that's only
+            # reachable via the developer's own `kubectl port-forward` (see
+            # hack/openfga/setup.sh), not from inside another pod.
+            - -openfga-api-url={{ .Values.openfga.apiURL }}
+            - -openfga-store-name={{ .Values.openfga.storeName }}
           ports:
             - name: mtls
               containerPort: {{ .Values.listenPort }}

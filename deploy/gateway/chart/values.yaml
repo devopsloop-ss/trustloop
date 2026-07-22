@@ -32,6 +32,14 @@ serviceAccount:
 # port templates/service.yaml exposes it on.
 listenPort: 8443
 
+# issue #4: where the gateway reaches OpenFGA to make its real can_call
+# Check calls, and which store to check against. storeName must be the
+# SAME store cmd/openfga-verify creates/reuses (see hack/openfga/setup.sh)
+# -- the gateway finds it, it never creates its own.
+openfga:
+  apiURL: http://openfga.openfga.svc.cluster.local:8080
+  storeName: trustloop-dev
+
 resources:
   requests:
     cpu: 20m

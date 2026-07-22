@@ -1,31 +1,36 @@
-// Command gateway is the TrustLoop enforcement gateway process (scaffold).
+// Command gateway is the TrustLoop enforcement gateway process.
 //
-// Per issue #3, this binary proves ONLY the identity-extraction half of the
-// gateway: it fetches its own SPIRE-issued SVID + trust bundle via the
+// Per issue #3, it fetches its own SPIRE-issued SVID + trust bundle via the
 // SPIFFE Workload API (workloadapi.NewX509Source -- the official go-spiffe
 // client, not a hand-rolled Workload API caller), terminates mTLS
 // connections, and for every peer that presents a valid SVID for this trust
-// domain, extracts and logs that peer's SPIFFE ID.
+// domain, extracts that peer's SPIFFE ID.
+//
+// Per issue #4, every extracted identity is then gated on a real OpenFGA
+// authorization decision before the stand-in tool call is allowed through:
+// the gateway calls OpenFGA's Check API (internal/authz) for the "agent ->
+// can_call -> tool" relation, and every decision -- allow AND deny -- is
+// written to a structured audit log (internal/audit) with who, what, when,
+// and why, per trustloop/CLAUDE.md's non-negotiable.
 //
 // It stands in for the future MCP-protocol-aware gateway (see ROADMAP.md
 // Phase 1) with the smallest possible protocol: read one newline-terminated
-// line from the peer (a stand-in "tool call"), log who sent it, and echo an
-// acknowledgement that includes the SPIFFE ID the gateway extracted -- so
-// the extraction result is provable from the *caller's* side too, not just
-// a server-side log line an external verifier has to take on faith.
+// line from the peer -- that line IS the name of the tool being requested
+// (issue #4's minimal extension of issue #3's stand-in protocol: "a tool
+// call" now means "which tool", not just an opaque message) -- and reply
+// with an ack that states the decision (allow/deny), so the outcome is
+// provable from the *caller's* side too, not just a server-side log line an
+// external verifier has to take on faith.
 //
-// Explicitly OUT of scope for this binary (see issue #3's scope boundary,
-// and issues #4/#6):
-//   - No OpenFGA authorization check -- every peer with a valid SPIFFE ID
-//     for this trust domain is accepted (see internal/identity's
-//     ServerTLSConfig doc comment for why that's the correct scope, not a
-//     shortcut).
-//   - No structured allow/deny audit log -- issue #4's job, once there is
-//     an actual authorization decision to log. What IS logged here is
-//     narrower: every accepted connection's extracted SPIFFE ID, and every
-//     rejected handshake's reason, which is what this ticket has to prove
-//     works.
-//   - No MCP wire protocol parsing.
+// Explicitly OUT of scope for this binary (see issue #4's scope boundary):
+//   - No MCP wire protocol parsing -- "which tool" is the entire stand-in
+//     request line, not a parsed field within a larger structured message.
+//   - No composition with the "user -> can_act_on_behalf_of -> agent"
+//     delegation hop -- see internal/authz and internal/audit's doc
+//     comments (ROADMAP.md Phase 2).
+//   - No actual tool-call forwarding -- there is no downstream tool server
+//     yet for an allowed call to be proxied to; "allow" here means "the
+//     gateway's authorization check passed", not "the tool ran".
 package main
 
 import (
@@ -44,22 +49,53 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 
+	"github.com/devopsloop-ss/trustloop/internal/audit"
+	"github.com/devopsloop-ss/trustloop/internal/authz"
 	"github.com/devopsloop-ss/trustloop/internal/identity"
 )
 
 func main() {
 	socket := flag.String("workload-api-socket", "", "SPIFFE Workload API socket address (e.g. unix:///spiffe-workload-api/spire-agent.sock). If empty, go-spiffe falls back to the SPIFFE_ENDPOINT_SOCKET environment variable.")
 	listenAddr := flag.String("listen-addr", ":8443", "address to accept mTLS connections on")
+	openfgaAPIURL := flag.String("openfga-api-url", "http://openfga.openfga.svc.cluster.local:8080", "OpenFGA HTTP API base URL. Defaults to the in-cluster Service DNS name (see hack/openfga/setup.sh) since the gateway runs in-cluster; override to a localhost port-forward (see hack/openfga/setup.sh's port-forward) for local/out-of-cluster runs.")
+	openfgaStoreName := flag.String("openfga-store-name", "trustloop-dev", "OpenFGA store to authorize against. Must already exist (created by cmd/openfga-verify / hack/openfga/setup.sh) -- the gateway finds it, it never creates one.")
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "gateway: ", log.LstdFlags|log.Lmicroseconds)
+	// Deliberately a SEPARATE, prefix-free, timestamp-free *log.Logger
+	// writing to the same stdout: every line this one emits is a bare JSON
+	// object (see internal/audit), so it stays directly `jq`-able out of
+	// `kubectl logs` without the human-readable "gateway: 2026/... " prefix
+	// the narrative logger above adds. Both interleave in the same pod log
+	// stream, but each line is unambiguous about which kind it is (starts
+	// with "gateway: " or starts with "{").
+	auditLogger := audit.New(os.Stdout)
 
-	if err := run(*socket, *listenAddr, logger); err != nil {
+	checker, err := authz.NewChecker(*openfgaAPIURL, *openfgaStoreName)
+	if err != nil {
+		// Fail loudly at startup rather than serving connections with no
+		// way to authorize them. The alternative -- start anyway and
+		// fail-closed-deny every request once a connection actually comes
+		// in -- would look like the gateway is up and healthy while every
+		// call is silently rejected; better to never reach Ready at all.
+		logger.Fatalf("connecting to OpenFGA (issue #4 requires a real authorization check for every request, not a stub): %v", err)
+	}
+
+	if err := run(*socket, *listenAddr, checker, auditLogger, logger); err != nil {
 		logger.Fatalf("exiting: %v", err)
 	}
 }
 
-func run(socket, listenAddr string, logger *log.Logger) error {
+// canCallChecker is the subset of *authz.Checker that handleConn depends
+// on, so tests can supply a fake OpenFGA response without a live OpenFGA
+// server (see main_test.go) while production code (main, above) always
+// wires in the real *authz.Checker calling the real OpenFGA Check API --
+// never a stub standing in for the actual authorization engine itself.
+type canCallChecker interface {
+	CheckCanCall(ctx context.Context, agentSubject, tool string) (authz.Decision, error)
+}
+
+func run(socket, listenAddr string, checker canCallChecker, auditLogger *audit.Logger, logger *log.Logger) error {
 	// Shut down cleanly on SIGTERM (how Kubernetes asks a pod to stop) as
 	// well as SIGINT (local Ctrl-C during development), rather than
 	// getting killed mid-handshake.
@@ -135,14 +171,17 @@ func run(socket, listenAddr string, logger *log.Logger) error {
 			_ = conn.Close()
 			continue
 		}
-		go handleConn(ctx, tlsConn, logger)
+		go handleConn(ctx, tlsConn, checker, auditLogger, logger)
 	}
 }
 
 // handleConn extracts the peer's SPIFFE identity (rejecting the connection
-// if it doesn't have one) and then runs the stand-in "MCP tool call"
-// exchange described in the package doc comment.
-func handleConn(ctx context.Context, conn *tls.Conn, logger *log.Logger) {
+// if it doesn't have one), reads the stand-in "which tool" request
+// described in the package doc comment, checks OpenFGA's can_call relation
+// for that (identity, tool) pair, writes a structured audit log entry for
+// the decision (issue #4's non-negotiable: every decision, allow AND deny),
+// and replies to the peer with the outcome.
+func handleConn(ctx context.Context, conn *tls.Conn, checker canCallChecker, auditLogger *audit.Logger, logger *log.Logger) {
 	defer conn.Close()
 	remote := conn.RemoteAddr().String()
 
@@ -152,6 +191,13 @@ func handleConn(ctx context.Context, conn *tls.Conn, logger *log.Logger) {
 		// comment for why the underlying error already explains *which*
 		// case this was (no cert / expired / wrong trust domain /
 		// self-signed junk not in the bundle).
+		//
+		// Deliberately NOT an audit.Logger entry: there is no SPIFFE
+		// identity here to attribute a decision to -- this is a rejected
+		// mTLS handshake, not an authorization decision about a known
+		// caller. It's still fully logged (via the narrative logger, same
+		// as issue #3), just not as an authz Entry with a caller identity
+		// that doesn't exist.
 		logger.Printf("REJECTED connection from %s: %v", remote, err)
 		return
 	}
@@ -161,21 +207,69 @@ func handleConn(ctx context.Context, conn *tls.Conn, logger *log.Logger) {
 	// protocol parsing is out of scope for this ticket). One
 	// newline-terminated line is enough to prove the extracted identity is
 	// actually usable by whatever comes after the handshake -- not just
-	// logged and discarded.
+	// logged and discarded. As of issue #4, that line IS the name of the
+	// tool being requested.
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := bufio.NewReader(conn).ReadString('\n')
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
+	tool := strings.TrimSpace(line)
+	if tool == "" {
 		if err != nil {
 			logger.Printf("peer %s (%s) disconnected before sending a stand-in tool call: %v", remote, peerID, err)
 		}
 		return
 	}
-	logger.Printf("stand-in tool call from %s: %q", peerID, trimmed)
+	logger.Printf("stand-in tool call from %s: tool=%q", peerID, tool)
 
-	ack := fmt.Sprintf("ack peer_spiffe_id=%s tool_call=%q\n", peerID, trimmed)
+	// The actual authorization check (issue #4's core job): the OpenFGA
+	// "user" is derived ONLY from the cryptographically verified peerID
+	// above, never from anything read off the wire -- see
+	// authz.SubjectForSPIFFEID's doc comment for why that matters.
+	subject := authz.SubjectForSPIFFEID(peerID)
+	decision, checkErr := checker.CheckCanCall(ctx, subject, tool)
+
+	entry := audit.Entry{
+		CallerSPIFFEID: peerID.String(),
+		OnBehalfOf:     audit.OnBehalfOfUnresolved,
+		Tool:           tool,
+		FGASubject:     decision.Subject,
+		FGARelation:    decision.Relation,
+		FGAObject:      decision.Object,
+		RemoteAddr:     remote,
+	}
+
+	var reply string
+	if checkErr != nil {
+		// Fail CLOSED: an OpenFGA call that errored (network failure, store
+		// gone, etc.) is not evidence of a grant. See
+		// authz.Checker.CheckCanCall's doc comment -- this is the one place
+		// that contract is enforced.
+		entry.Decision = audit.Deny
+		entry.Reason = fmt.Sprintf("OpenFGA check failed -- failing closed (deny): %v", checkErr)
+		entry.Error = checkErr.Error()
+		reply = fmt.Sprintf("ack decision=deny peer_spiffe_id=%s tool=%q reason=%q\n", peerID, tool, entry.Reason)
+	} else if decision.Allowed {
+		entry.Decision = audit.Allow
+		entry.Reason = decision.Reason
+		reply = fmt.Sprintf("ack decision=allow peer_spiffe_id=%s tool=%q\n", peerID, tool)
+	} else {
+		entry.Decision = audit.Deny
+		entry.Reason = decision.Reason
+		reply = fmt.Sprintf("ack decision=deny peer_spiffe_id=%s tool=%q reason=%q\n", peerID, tool, entry.Reason)
+	}
+
+	// This is the audit log entry itself -- written for BOTH allow and deny,
+	// unconditionally, before the reply is even sent, so a crash or failed
+	// write on the reply path below can never suppress the record of the
+	// decision that was actually made.
+	auditLogger.Log(entry)
+	logger.Printf("%s: peer=%s tool=%q reason=%s", strings.ToUpper(string(entry.Decision)), peerID, tool, entry.Reason)
+
+	// Note: an "allow" here means the authorization check passed -- there is
+	// no downstream tool server yet for the call to be forwarded to (see
+	// package doc comment). Forwarding is future work once real MCP
+	// protocol parsing exists.
 	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if _, err := conn.Write([]byte(ack)); err != nil {
-		logger.Printf("writing ack to %s (%s): %v", remote, peerID, err)
+	if _, err := conn.Write([]byte(reply)); err != nil {
+		logger.Printf("writing reply to %s (%s): %v", remote, peerID, err)
 	}
 }

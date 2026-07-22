@@ -1,8 +1,8 @@
-# Throwaway verification Job for issue #3 -- NOT a TrustLoop component, same
-# spirit as deploy/spire/sample-workload.yaml. Applied directly via
-# `kubectl apply` (not part of any Helm release), same reasoning as that
-# file: this is a one-shot verification fixture, not product code that
-# needs upgrade/rollback semantics.
+# Throwaway verification Job for issues #3 and #4 -- NOT a TrustLoop
+# component, same spirit as deploy/spire/sample-workload.yaml. Applied
+# directly via `kubectl apply` (not part of any Helm release), same
+# reasoning as that file: this is a one-shot verification fixture, not
+# product code that needs upgrade/rollback semantics.
 #
 # Deliberately runs in the trustloop-sample namespace as the sample-workload
 # service account -- i.e. it REUSES the exact registration entry
@@ -13,13 +13,17 @@
 # if that's cleaner" fork in issue #3's Done criteria resolved in favor of
 # reuse.
 #
-# Runs cmd/gateway-verify, which performs BOTH halves of what this ticket
-# has to prove in one pass: (1) dial the gateway with this pod's own real
-# SPIRE-issued SVID and confirm it's accepted and correctly identified, and
-# (2) dial the gateway with certificates that are deliberately NOT valid
-# SPIFFE identities for this trust domain, and confirm each is rejected.
-# See cmd/gateway-verify's package doc comment for exactly which invalid
-# cases are covered here vs. in internal/identity's unit tests.
+# Runs cmd/gateway-verify, which performs what these two tickets have to
+# prove, all in one pass: (1) dial the gateway with this pod's own real
+# SPIRE-issued SVID and confirm it's accepted and correctly identified;
+# (2) [issue #4] write a real can_call tuple for this identity into the live
+# OpenFGA store and confirm the gateway's decision for a granted tool is a
+# real, OpenFGA-Check-backed allow; (3) [issue #4] confirm the gateway's
+# decision for an ungranted tool is a real deny, not a stub; and (4) dial
+# the gateway with certificates that are deliberately NOT valid SPIFFE
+# identities for this trust domain, and confirm each is rejected. See
+# cmd/gateway-verify's package doc comment for exactly which invalid cases
+# are covered here vs. in internal/identity's unit tests.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -44,6 +48,12 @@ spec:
             - -gateway-addr=gateway.trustloop-gateway.svc.cluster.local:8443
             - -expected-gateway-id=spiffe://trustloop-dev.local/ns/trustloop-gateway/sa/gateway
             - -workload-api-socket=unix:///spiffe-workload-api/spire-agent.sock
+            # issue #4: same OpenFGA store/endpoint the live gateway checks
+            # against (see deploy/gateway/chart/values.yaml's openfga.*) --
+            # gateway-verify writes its granted-case tuple here and expects
+            # the gateway's decisions to reflect it.
+            - -openfga-api-url=http://openfga.openfga.svc.cluster.local:8080
+            - -openfga-store-name=trustloop-dev
           volumeMounts:
             - name: spiffe-workload-api
               mountPath: /spiffe-workload-api
