@@ -1,0 +1,55 @@
+# Throwaway verification Job for issue #3 -- NOT a TrustLoop component, same
+# spirit as deploy/spire/sample-workload.yaml. Applied directly via
+# `kubectl apply` (not part of any Helm release), same reasoning as that
+# file: this is a one-shot verification fixture, not product code that
+# needs upgrade/rollback semantics.
+#
+# Deliberately runs in the trustloop-sample namespace as the sample-workload
+# service account -- i.e. it REUSES the exact registration entry
+# hack/spire/setup.sh already creates (selectors k8s:ns:trustloop-sample,
+# k8s:sa:sample-workload) rather than minting a second "valid client"
+# identity for what is fundamentally the same role (an already-attested
+# SPIRE workload dialing the gateway). This is the "or register a new one
+# if that's cleaner" fork in issue #3's Done criteria resolved in favor of
+# reuse.
+#
+# Runs cmd/gateway-verify, which performs BOTH halves of what this ticket
+# has to prove in one pass: (1) dial the gateway with this pod's own real
+# SPIRE-issued SVID and confirm it's accepted and correctly identified, and
+# (2) dial the gateway with certificates that are deliberately NOT valid
+# SPIFFE identities for this trust domain, and confirm each is rejected.
+# See cmd/gateway-verify's package doc comment for exactly which invalid
+# cases are covered here vs. in internal/identity's unit tests.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gateway-verify
+  namespace: trustloop-sample
+spec:
+  # Never retry automatically -- hack/gateway/setup.sh deletes and
+  # re-applies this Job itself on every run, and a silently-retried Job
+  # would muddy "did the run I'm looking at logs for actually reflect the
+  # current gateway build" with a stale prior attempt's output.
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: sample-workload
+      restartPolicy: Never
+      containers:
+        - name: gateway-verify
+          image: trustloop-gateway:dev
+          imagePullPolicy: Never
+          command: ["/usr/local/bin/gateway-verify"]
+          args:
+            - -gateway-addr=gateway.trustloop-gateway.svc.cluster.local:8443
+            - -expected-gateway-id=spiffe://trustloop-dev.local/ns/trustloop-gateway/sa/gateway
+            - -workload-api-socket=unix:///spiffe-workload-api/spire-agent.sock
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+      volumes:
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true

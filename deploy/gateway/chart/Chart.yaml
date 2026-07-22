@@ -1,0 +1,11 @@
+apiVersion: v2
+name: trustloop-gateway
+description: >-
+  TrustLoop's own mTLS/SPIFFE-identity-extracting gateway (scaffold, issue
+  #3). Not a third-party chart -- this is this repo's own product, packaged
+  as a chart per trustloop/CLAUDE.md's "Helm... from day one" rule. See
+  deploy/gateway/Dockerfile and hack/gateway/setup.sh for how the image this
+  chart deploys gets built.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

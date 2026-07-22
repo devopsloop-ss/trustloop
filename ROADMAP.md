@@ -18,6 +18,8 @@
 Scope is deliberately narrow and deliberately *not* tied to any orchestrator yet — prove the core mechanism works in isolation first.
 
 - [ ] Gateway process that intercepts an MCP tool call, extracts caller SPIFFE identity, checks OpenFGA, allows/denies
+  - [x] Gateway scaffold + SPIFFE/mTLS identity extraction (issue #3) -- `cmd/gateway` fetches its own SVID/trust bundle from the SPIRE Workload API via `go-spiffe`, terminates mutual TLS, and correctly extracts a valid peer's SPIFFE ID (verified end-to-end against a real SPIRE-issued SVID) while rejecting peers with no cert, a self-signed cert, or a cert for a trust domain the gateway doesn't trust (verified end-to-end; an expired-cert case is covered by unit tests against a controlled CA). See `hack/gateway/setup.sh` for the repeatable live verification and `internal/identity` for the unit tests.
+  - [ ] OpenFGA authorization check + allow/deny decision (issue #4)
 - [ ] At least 2 test cases: an authorized call succeeds end-to-end; an unauthorized call is rejected with a clear reason
 - [ ] Every decision logged with: caller identity, on-whose-behalf, tool called, timestamp, allow/deny, and why
 - [ ] One working integration example: the gateway mediates a tool call made from inside an Argo Workflow step (proves "adoptable by an existing orchestrator," not just ours)

@@ -93,6 +93,31 @@ This:
    the pod and inspecting it with `openssl x509` — proving a real SVID was
    issued to the workload, not just that the server thinks it should be.
 
+### Local gateway scaffold (Phase 1)
+
+The gateway (`cmd/gateway`) is the piece the rest of TrustLoop's Phase 1
+work builds on: it fetches its own SPIRE-issued identity via the SPIFFE
+Workload API and terminates SPIFFE/mTLS connections, correctly extracting
+the caller's SPIFFE ID for a valid peer and refusing a peer that doesn't
+present one (no certificate, a self-signed cert, or a cert for a trust
+domain this gateway doesn't trust). See [CLAUDE.md](CLAUDE.md) — this repo
+does not implement identity issuance or X.509/TLS trust decisions itself;
+every accept/reject decision here is made by the official
+[go-spiffe](https://github.com/spiffe/go-spiffe) SDK. The OpenFGA
+authorization check and structured allow/deny audit log are separate,
+later work (see [ROADMAP.md](ROADMAP.md) Phase 1) — this scaffold is
+identity extraction only.
+
+Requires SPIRE already running locally (`hack/spire/setup.sh`, above), plus
+`docker` (to build the gateway's image) and `k3d` (to load it into the
+cluster with no registry involved). Builds the gateway, deploys it via its
+own Helm chart ([deploy/gateway/chart](deploy/gateway/chart)), and proves
+the accept/reject behavior against the live cluster (one command):
+
+```sh
+hack/gateway/setup.sh
+```
+
 Tear it down with:
 
 ```sh
