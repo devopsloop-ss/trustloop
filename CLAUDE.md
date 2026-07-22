@@ -7,6 +7,7 @@ Supplements the workspace-root `CLAUDE.md` (loaded automatically as ancestor con
 - **Go.** Matches SPIRE and OpenFGA (both Go), and is a deliberate learning choice as well as a technical one.
 - **Comment thoroughly.** Same standard as Topoloop — explain what non-trivial identity/authz mechanisms are doing and why, not just business logic. This is security-critical code; a future reader needs to understand *why* a check exists, not just that it does.
 - **Do not implement identity issuance or the authorization engine from scratch.** SPIRE issues identity; OpenFGA evaluates authorization. This repo's code is the enforcement gateway and orchestrator adapters — the glue, not the trust boundary itself.
+- **Helm, not docker-compose or hand-rolled install scripts, for anything cluster-deployed.** OpenFGA, SPIRE, and later this repo's own gateway all get installed via their official Helm chart (or ours, if none exists) into a local k3d cluster — from day one. This doesn't contradict "orchestrator-agnostic, must work standalone" (see Design principles in README.md): the gateway/binary itself stays portable regardless of how it's packaged, and a Helm chart is actually the natural adoption path for the target audience (Kubernetes-native orchestrator operators), not a coupling to any one of them. `helm`, `k3d`, and `kubectl` are required local tools, matching Topoloop's local dev target.
 
 ## Non-negotiable for this repo specifically
 

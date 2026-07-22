@@ -9,9 +9,9 @@
 
 ## Phase 0 — Environment
 
-- [ ] SPIRE server + agent running locally (k3d, matching Topoloop's local target) issuing SVIDs to sample workloads automatically
-- [ ] OpenFGA running locally with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
-- **Done when:** a fresh clone + one script gets a sample agent container a real SPIRE-issued SVID, verifiable via `spire-server entry show`
+- [ ] SPIRE server + agent running locally on a k3d cluster (matching Topoloop's local target), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
+- [ ] OpenFGA running locally on the same k3d cluster, installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
+- **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts
 
 ## Phase 1 — MVP: one enforced tool call, standalone
 
@@ -21,7 +21,7 @@ Scope is deliberately narrow and deliberately *not* tied to any orchestrator yet
 - [ ] At least 2 test cases: an authorized call succeeds end-to-end; an unauthorized call is rejected with a clear reason
 - [ ] Every decision logged with: caller identity, on-whose-behalf, tool called, timestamp, allow/deny, and why
 - [ ] One working integration example: the gateway mediates a tool call made from inside an Argo Workflow step (proves "adoptable by an existing orchestrator," not just ours)
-- [ ] Entire MVP runs locally via a single documented command (`docker compose up` or equivalent) — no cloud dependency
+- [ ] Entire MVP runs locally via a single documented command (`helm install` against the local k3d cluster, or a script wrapping it) — no cloud dependency
 
 **MVP acceptance criteria (all must hold):**
 1. A workload gets a real SPIRE SVID automatically on startup — no manual cert copying.
