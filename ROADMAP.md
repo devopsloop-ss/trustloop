@@ -9,9 +9,10 @@
 
 ## Phase 0 — Environment
 
-- [x] SPIRE server + agent running locally on a k3d cluster (matching Topoloop's local target), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
-- [x] OpenFGA running locally on a k3d cluster (`trustloop-dev`), installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
-- **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts — **met**: `hack/spire/setup.sh` installs SPIRE server+agent (chart `spire/spire@0.29.0`) on `trustloop-dev`, creates a K8s-selector-based registration entry (`k8s:ns:trustloop-sample`, `k8s:sa:sample-workload`), and verifies issuance both server-side (`spire-server entry show`) and workload-side (the sample pod's own fetched X.509 SVID, pulled out and inspected with `openssl x509`); `hack/openfga/setup.sh` does the same for OpenFGA
+- [x] SPIRE server + agent running locally on the local dev cluster (matching Topoloop's local target — originally a per-repo k3d cluster, now the shared minikube profile; see CLAUDE.md), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
+- [x] OpenFGA running locally on the same cluster, installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
+- **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts — **met**: `hack/spire/setup.sh` installs SPIRE server+agent (chart `spire/spire@0.29.0`) on the local cluster, creates a K8s-selector-based registration entry (`k8s:ns:trustloop-sample`, `k8s:sa:sample-workload`), and verifies issuance both server-side (`spire-server entry show`) and workload-side (the sample pod's own fetched X.509 SVID, pulled out and inspected with `openssl x509`); `hack/openfga/setup.sh` does the same for OpenFGA
+- [x] Migrated the local dev target from k3d-on-Docker-Desktop to the shared minikube (Hyper-V) cluster after Docker Desktop was retired (2026-07-22) — all three `hack/*/setup.sh` verify flows re-run and passing on minikube (issue #14)
 
 ## Phase 1 — MVP: one enforced tool call, standalone
 
@@ -23,7 +24,7 @@ Scope is deliberately narrow and deliberately *not* tied to any orchestrator yet
 - [x] At least 2 test cases: an authorized call succeeds end-to-end; an unauthorized call is rejected with a clear reason -- `cmd/gateway-verify`'s live checks (above) cover both against the real cluster; `cmd/gateway`'s unit tests (`TestHandleConn_AllowedToolCall`, `TestHandleConn_DeniedToolCall`, `TestHandleConn_FailsClosedOnOpenFGAError`) cover both plus the fail-closed error path in isolation.
 - [x] Every decision logged with: caller identity, on-whose-behalf, tool called, timestamp, allow/deny, and why -- `internal/audit` writes one structured (ndjson) `Entry` per decision, both allow and deny, covering exactly those fields (`on_behalf_of` is an explicit, documented placeholder for now -- see that package's doc comment -- since composing the `user -> can_act_on_behalf_of -> agent` delegation hop into this decision is Phase 2 work, not issue #4's scope).
 - [ ] One working integration example: the gateway mediates a tool call made from inside an Argo Workflow step (proves "adoptable by an existing orchestrator," not just ours)
-- [ ] Entire MVP runs locally via a single documented command (`helm install` against the local k3d cluster, or a script wrapping it) — no cloud dependency
+- [ ] Entire MVP runs locally via a single documented command (`helm install` against the local minikube cluster, or a script wrapping it) — no cloud dependency
 
 **MVP acceptance criteria (all must hold):**
 1. A workload gets a real SPIRE SVID automatically on startup — no manual cert copying.

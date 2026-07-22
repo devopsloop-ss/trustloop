@@ -1,6 +1,6 @@
 # Helm values for the local TrustLoop dev deployment of the gateway
 # scaffold (issue #3). See hack/gateway/setup.sh, the single documented
-# entrypoint that builds the image, imports it into the local k3d cluster,
+# entrypoint that builds the image into the shared local minikube cluster
 # and installs this chart with these values.
 #
 # Deliberately dev-only, same spirit as deploy/spire/values.yaml and
@@ -8,15 +8,17 @@
 # identity extraction works end-to-end), not a production deployment.
 
 image:
-  # Built locally by hack/gateway/setup.sh (cross-compiled + `docker build`)
-  # and loaded straight into the k3d cluster's containerd via `k3d image
-  # import` -- never pushed to or pulled from any registry for local dev.
+  # Built locally by hack/gateway/setup.sh (cross-compiled, then
+  # `minikube image build` against the Docker daemon inside the minikube
+  # VM, which lands the image directly in the cluster's image store) --
+  # never pushed to or pulled from any registry for local dev.
   repository: trustloop-gateway
   tag: dev
-  # Never: forces containerd to use the image already imported into the
-  # cluster's local store rather than trying (and failing, since this image
-  # isn't published anywhere) to pull it. This is the standard k3d local-dev
-  # pattern for images with no registry.
+  # Never: forces the kubelet to use the image already present in the
+  # cluster's local image store rather than trying (and failing, since this
+  # image isn't published anywhere) to pull it. This is the standard
+  # local-dev pattern for images with no registry (minikube now, k3d
+  # before).
   pullPolicy: Never
 
 # The identity the K8s workload attestor issues to the gateway is entirely
