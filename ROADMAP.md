@@ -10,7 +10,7 @@
 ## Phase 0 — Environment
 
 - [ ] SPIRE server + agent running locally (k3d, matching Topoloop's local target) issuing SVIDs to sample workloads automatically
-- [ ] OpenFGA running locally with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
+- [x] OpenFGA running locally with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
 - **Done when:** a fresh clone + one script gets a sample agent container a real SPIRE-issued SVID, verifiable via `spire-server entry show`
 
 ## Phase 1 — MVP: one enforced tool call, standalone

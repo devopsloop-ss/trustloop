@@ -1,0 +1,43 @@
+# Local OpenFGA server for TrustLoop development.
+#
+# This is Phase 0 scope only: get OpenFGA running locally, repeatably, so the
+# authorization model in model.fga can be loaded and checked against. It is
+# deliberately NOT production config:
+#   - datastore-engine is "memory" (OpenFGA's default) -- all stores, models,
+#     and tuples are lost when the container stops. That's fine for local
+#     dev/CI where hack/openfga/setup.sh recreates everything from scratch
+#     on every run. A later phase can switch this to the postgres engine
+#     (OpenFGA supports it natively) once we need state to survive restarts.
+#   - authn-method is "none" -- no auth in front of the OpenFGA API itself.
+#     Never point this compose file at anything but localhost.
+#
+# Usage: see hack/openfga/setup.sh, which brings this up, waits for health,
+# writes the model, writes test tuples, and runs verification checks.
+services:
+  openfga:
+    image: openfga/openfga:latest
+    container_name: trustloop-openfga
+    command: run
+    environment:
+      # In-memory datastore: zero external dependencies for local dev.
+      - OPENFGA_DATASTORE_ENGINE=memory
+      - OPENFGA_LOG_FORMAT=json
+      # Playground is handy for poking at the model in a browser during
+      # development: http://localhost:3000/playground
+      - OPENFGA_PLAYGROUND_ENABLED=true
+    ports:
+      - "8080:8080" # HTTP API
+      - "8081:8081" # gRPC API
+      - "3000:3000" # Playground UI
+    healthcheck:
+      # OpenFGA exposes a standard gRPC health check service; the image
+      # ships grpc_health_probe for exactly this purpose.
+      test:
+        [
+          "CMD",
+          "/usr/local/bin/grpc_health_probe",
+          "-addr=openfga:8081",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10

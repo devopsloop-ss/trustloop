@@ -24,4 +24,34 @@ The genuinely new work here is the **integration**: a thin enforcement gateway s
 
 ## Status
 
-Nothing runnable yet — this repo currently holds the plan. Follow [ROADMAP.md](ROADMAP.md) for MVP progress.
+Phase 0 is underway. Follow [ROADMAP.md](ROADMAP.md) for MVP progress.
+
+### Local OpenFGA (Phase 0)
+
+OpenFGA is the authorization engine for the `User -> can_act_on_behalf_of -> Agent`
+and `Agent -> can_call -> Tool` delegation model (see [ROADMAP.md](ROADMAP.md)).
+This repo does not implement authorization itself — see [CLAUDE.md](CLAUDE.md).
+
+Bring it up locally, load the model, and verify it behaves correctly (one command):
+
+```sh
+hack/openfga/setup.sh
+```
+
+This starts OpenFGA via [deploy/openfga/docker-compose.yml](deploy/openfga/docker-compose.yml)
+(in-memory datastore, no external dependencies), waits for its health check,
+then runs [cmd/openfga-verify](cmd/openfga-verify) which:
+
+1. Finds-or-creates an OpenFGA store (`trustloop-dev`).
+2. Loads [deploy/openfga/model.fga](deploy/openfga/model.fga) — the DSL source of truth for the model — as a new authorization model version.
+3. Writes a couple of test tuples: one granted delegation, one granted tool call.
+4. Runs `Check` calls for both a granted and an ungranted case per relation, and reports PASS/FAIL against what's expected — this is the actual verification, not just "the server started."
+
+The script and the `openfga-verify` program are both safe to re-run — the store
+and model are found-or-created, and duplicate tuple writes are ignored.
+
+Stop OpenFGA with:
+
+```sh
+docker compose -f deploy/openfga/docker-compose.yml down
+```
