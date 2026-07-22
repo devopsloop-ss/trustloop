@@ -15,11 +15,12 @@ Supplements the workspace-root `CLAUDE.md` (loaded automatically as ancestor con
 
 ## Working a ticket
 
-Work happens across multiple sessions: a separate "orchestrator" session tracks the [project board](https://github.com/orgs/devopsloop-ss/projects/1) and reviews results; each ticket gets worked in its own session, scoped to just that ticket. If you're a session picking up a ticket here:
+Work happens across multiple sessions: a separate "orchestrator" session tracks the [project board](https://github.com/orgs/devopsloop-ss/projects/1) and reviews results; each ticket gets worked in its own session, scoped to just that ticket. Use `hack/ticket.sh` rather than raw `gh` calls — it keeps the board in sync:
 
-1. `gh issue view <n>` — the ticket has a turn/token estimate and enough scope to start; cross-reference [ROADMAP.md](ROADMAP.md) for which phase it belongs to and how it fits the whole.
-2. Branch: `issue-<n>-<short-slug>`.
-3. Implement only what the ticket covers — resist scope creep into other open tickets even if related.
-4. Commit referencing the issue (e.g. `Refs #<n>`).
-5. Open a PR with `Closes #<n>` in the description so the issue auto-closes on merge.
-6. **Don't merge your own PR.** Leave that for the orchestrator session/user to review — that review is the whole point of the split.
+1. `hack/ticket.sh start <n>` — shows the ticket (cross-reference [ROADMAP.md](ROADMAP.md) for which phase it's in), creates the branch, and moves the board card to In Progress.
+2. Implement only what the ticket covers — resist scope creep into other open tickets even if related.
+3. Commit referencing the issue (e.g. `Refs #<n>`).
+4. `hack/ticket.sh submit` — opens a PR with `Closes #<n>` so the issue auto-closes on merge (issue number is inferred from the branch).
+5. **Don't merge your own PR.** Leave that for the orchestrator session/user to review — that review is the whole point of the split.
+
+`hack/ticket.sh board` gives a quick text status count without leaving the terminal.
