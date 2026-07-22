@@ -9,9 +9,9 @@
 
 ## Phase 0 — Environment
 
-- [ ] SPIRE server + agent running locally on a k3d cluster (matching Topoloop's local target), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
+- [x] SPIRE server + agent running locally on a k3d cluster (matching Topoloop's local target), installed via the official `spiffe/spire` Helm chart, issuing SVIDs to sample workloads automatically
 - [x] OpenFGA running locally on a k3d cluster (`trustloop-dev`), installed via the official `openfga/helm-charts` chart (not docker-compose — see CLAUDE.md), with a minimal authorization model: `User -> can_act_on_behalf_of -> Agent`, `Agent -> can_call -> Tool`
-- **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts
+- **Done when:** a fresh clone + one script gets a sample agent workload a real SPIRE-issued SVID (verifiable via `spire-server entry show`) and a verified OpenFGA model, both via `helm install`, not hand-rolled install scripts — **met**: `hack/spire/setup.sh` installs SPIRE server+agent (chart `spire/spire@0.29.0`) on `trustloop-dev`, creates a K8s-selector-based registration entry (`k8s:ns:trustloop-sample`, `k8s:sa:sample-workload`), and verifies issuance both server-side (`spire-server entry show`) and workload-side (the sample pod's own fetched X.509 SVID, pulled out and inspected with `openssl x509`); `hack/openfga/setup.sh` does the same for OpenFGA
 
 ## Phase 1 — MVP: one enforced tool call, standalone
 

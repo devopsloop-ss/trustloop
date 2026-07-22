@@ -55,6 +55,44 @@ The script and the `openfga-verify` program are both safe to re-run — the
 cluster, Helm release, store, and model are all found-or-created/upgraded in
 place, and duplicate tuple writes are ignored.
 
+### Local SPIRE (Phase 0)
+
+SPIRE issues every agent workload a short-lived, cryptographically verifiable
+SPIFFE identity (an X.509 SVID) via Kubernetes workload attestation — no
+manual cert handling, no static API keys. This repo does not implement
+identity issuance itself — see [CLAUDE.md](CLAUDE.md).
+
+Also requires `openssl` locally (used only to inspect the workload's fetched
+certificate as part of verification — never to issue or handle anything
+identity-related itself). Bring SPIRE up on the same local k3d cluster,
+create a registration entry for a throwaway sample workload, and verify it
+actually receives a real SVID (one command):
+
+```sh
+hack/spire/setup.sh
+```
+
+This:
+
+1. Reuses the local `trustloop-dev` k3d cluster (created by
+   `hack/openfga/setup.sh` if it doesn't already exist).
+2. Installs SPIRE server + agent via the official `spiffe/spire` Helm chart
+   ([deploy/spire/values.yaml](deploy/spire/values.yaml) pins the chart to a
+   specific version and documents every non-default setting — trust domain,
+   why the SPIRE Controller Manager is off, why kubelet cert verification is
+   skipped — and why).
+3. Waits for the agent to attest to the server via the K8s node attestor
+   (PSAT), then creates a registration entry for a sample workload using the
+   K8s *workload* attestor: selectors `k8s:ns:trustloop-sample` /
+   `k8s:sa:sample-workload`, not a hand-typed workload ID — any pod running
+   as that namespace/service-account gets issued the identity automatically.
+4. Deploys the sample workload
+   ([deploy/spire/sample-workload.yaml](deploy/spire/sample-workload.yaml))
+   and verifies issuance twice: server-side via `spire-server entry show`,
+   and workload-side by pulling the actual issued certificate back out of
+   the pod and inspecting it with `openssl x509` — proving a real SVID was
+   issued to the workload, not just that the server thinks it should be.
+
 Tear it down with:
 
 ```sh
