@@ -5,12 +5,15 @@ go 1.26.4
 require (
 	github.com/openfga/go-sdk v0.8.2
 	github.com/openfga/language/pkg/go v0.3.1
+	github.com/spiffe/go-spiffe/v2 v2.8.1
 )
 
 require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect

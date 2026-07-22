@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      # Must match the (namespace, service account) pair the registration
+      # entry in hack/gateway/setup.sh selects on -- that's what makes the
+      # SPIRE agent hand THIS pod the gateway's SPIFFE ID and not some
+      # other identity (or none at all).
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -listen-addr=:{{ .Values.listenPort }}
+            # The SPIFFE CSI driver (see volumes below) always mounts the
+            # agent's Workload API socket at this fixed path -- same
+            # convention deploy/spire/sample-workload.yaml uses. Passed
+            # explicitly (rather than relying on go-spiffe's
+            # SPIFFE_ENDPOINT_SOCKET env var default) so it's visible right
+            # here what this container actually talks to.
+            - -workload-api-socket=unix:///spiffe-workload-api/spire-agent.sock
+          ports:
+            - name: mtls
+              containerPort: {{ .Values.listenPort }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+      volumes:
+        # Same mechanism deploy/spire/sample-workload.yaml uses to reach the
+        # node-local spire-agent: the SPIFFE CSI driver (installed by the
+        # spire Helm chart, see deploy/spire/values.yaml) mounts the
+        # Workload API Unix socket into this pod -- not a hand-rolled
+        # hostPath volume, and not any credential this repo issues or
+        # manages itself (see trustloop/CLAUDE.md: "do not implement
+        # identity issuance from scratch").
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true

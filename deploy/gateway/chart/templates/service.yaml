@@ -1,0 +1,16 @@
+# ClusterIP is sufficient (and correct) here -- the gateway is only meant to
+# be reached from inside the cluster (by MCP clients / orchestrator steps
+# co-located there, and by hack/gateway/setup.sh's verification Job). It is
+# never exposed outside the cluster, which also isn't this ticket's concern.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: gateway
+  ports:
+    - name: mtls
+      port: {{ .Values.listenPort }}
+      targetPort: {{ .Values.listenPort }}
