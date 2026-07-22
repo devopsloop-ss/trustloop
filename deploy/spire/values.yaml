@@ -1,0 +1,123 @@
+# Helm values for the local TrustLoop dev deployment of SPIRE.
+#
+# Chart: spire/spire (from https://spiffe.github.io/helm-charts-hardened/),
+# pinned version 0.29.0 (app version v1.15.1) -- see hack/spire/setup.sh,
+# which is the single documented entrypoint that adds the repo and installs
+# this chart at that exact version. Same reasoning as
+# deploy/openfga/values.yaml: never install "latest", a chart bump could
+# silently change defaults (which sub-components are enabled, node/workload
+# attestor config) underneath a script nobody re-reads before running.
+#
+# This is the official "spire" umbrella chart -- it wires together
+# spire-server, spire-agent, and the SPIFFE CSI driver (which mounts the
+# agent's Workload API socket into workload pods without hand-rolled
+# hostPath volumes). Per trustloop/CLAUDE.md: "do not implement identity
+# issuance from scratch" -- this file only *configures* the official chart,
+# it doesn't replace any part of it.
+#
+# This is Phase 0 scope only -- get SPIRE issuing real SVIDs to a sample
+# workload via K8s workload attestation, repeatably, on the local
+# trustloop-dev k3d cluster. Deliberately NOT production config:
+
+global:
+  spire:
+    # The trust domain is the root of every SPIFFE ID issued by this SPIRE
+    # server (spiffe://<trustDomain>/...). It does not need to be a
+    # resolvable DNS name -- SPIFFE trust domains are just identifiers -- but
+    # by convention they look like one. ".local" makes it unambiguous this is
+    # the local dev trust domain, not a real one TrustLoop might register
+    # later; a production trust domain would be a deliberate separate choice,
+    # not this value silently reused.
+    trustDomain: trustloop-dev.local
+
+    # Purely a label SPIRE stamps into k8s_psat agent SPIFFE IDs
+    # (spiffe://<trustDomain>/spire/agent/k8s_psat/<clusterName>/<node-id>).
+    # Matches the k3d cluster name (trustloop-dev, see hack/spire/setup.sh)
+    # so the agent's own identity is legible at a glance.
+    clusterName: trustloop-dev
+
+    namespaces:
+      # The chart *can* split itself across two namespaces (spire-server for
+      # the server, spire-system for the agent/CSI driver/etc.), but that
+      # split is opt-in behind global.spire.recommendations.namespaceLayout
+      # (itself behind recommendations.enabled) -- a "production-recommended
+      # settings" bundle we're deliberately not turning on for Phase 0 dev
+      # (see the note on recommendations.enabled below). Left at its
+      # defaults, every component in this chart lands in one namespace: the
+      # Helm release's own namespace (spire-server, per the -n flag
+      # hack/spire/setup.sh installs with). That's simpler for local dev and
+      # is what this repo actually runs -- don't be misled by the chart's
+      # own namespace-name defaults below into expecting a spire-system
+      # namespace to exist; it won't unless namespaceLayout is turned on.
+      create: false
+
+# The chart bundles the SPIRE Controller Manager, which reconciles
+# ClusterSPIFFEID custom resources into SPIRE registration entries
+# automatically. We deliberately turn it off for Phase 0: this repo already
+# has an established pattern (see deploy/openfga/values.yaml +
+# cmd/openfga-verify) of "Helm installs the bare engine; a thin, reviewable
+# script/program owns writing the actual entries/data into it and verifying
+# them" -- hack/spire/setup.sh follows that same pattern here, creating the
+# one registration entry Phase 0 needs via `spire-server entry create` with
+# explicit K8s selectors (see that script). That keeps this already-flagged
+# "known-fiddly" area to exactly one thing to get right (the entry this repo
+# creates on purpose) instead of two (that entry, plus reasoning about what
+# the controller manager's own default catch-all ClusterSPIFFEID would ALSO
+# be doing to every pod in the cluster concurrently).
+spire-server:
+  controllerManager:
+    enabled: false
+
+  # Purely cosmetic (the CA Subject fields on issued certs, for legacy X.509
+  # tooling that doesn't understand SPIFFE URI SANs) -- SPIRE itself only
+  # ever trusts the SPIFFE ID in the SAN, never these fields. Overridden
+  # anyway so `openssl x509 -issuer` on a workload's SVID (see
+  # hack/spire/setup.sh's verification step) doesn't print the chart's
+  # generic default ("O=Example, CN=example.org") next to a trust domain of
+  # trustloop-dev.local, which would read as a copy-pasted values file
+  # nobody actually reviewed.
+  caSubject:
+    country: US
+    organization: TrustLoop
+    commonName: trustloop-dev.local
+
+# Not needed for Phase 0 (issuing X.509 SVIDs via K8s workload attestation).
+# Every extra component here is one more moving part in an area ROADMAP.md
+# already flags as the highest-risk item -- keep the footprint minimal.
+spiffe-oidc-discovery-provider:
+  enabled: false
+
+# --- Everything below is left at the chart's own defaults; called out here ---
+# --- so a future reader doesn't have to diff this file against the chart's ---
+# --- values.yaml to know what's actually in play: ---
+#
+# spire-agent.nodeAttestor.k8sPSAT.enabled: true (default)
+#   The K8s node attestor: each spire-agent proves its identity to the
+#   server using its pod's projected service account token (PSAT), which the
+#   Kubernetes API server itself vouches for. This is what lets agents join
+#   the trust domain with zero manual bootstrapping/token-copying.
+#
+# spire-agent.workloadAttestors.k8s.enabled: true (default)
+#   The K8s *workload* attestor -- this is the piece the ticket is actually
+#   about. When a workload connects to the agent's Workload API socket, the
+#   agent asks the kubelet which pod owns that connection (by PID -> cgroup
+#   -> container -> pod lookup) and turns the answer into selectors
+#   (k8s:ns:<namespace>, k8s:sa:<service-account>, etc.). Those selectors are
+#   matched against registration entries -- see hack/spire/setup.sh for the
+#   entry this repo creates and how its selectors line up with the sample
+#   workload's namespace/service account.
+#
+# spire-agent.workloadAttestors.k8s.verification.type: skip (default)
+#   Skips verifying the kubelet's serving certificate when the agent asks it
+#   "which pod owns this process". This is a dev-only shortcut, not a
+#   pattern to copy into a real deployment (see CLAUDE.md's "no static
+#   long-lived credentials" rule -- same spirit: don't skip a trust check in
+#   anything meant to run for real). A production cluster should configure
+#   `hostCert` or `apiServerCA` verification instead. It's safe here because
+#   trustloop-dev is a single-node local k3d cluster only this machine can
+#   reach -- there's no other tenant's kubelet to be spoofed.
+#
+# spiffe-csi-driver.enabled: true (default)
+#   Mounts each node's spire-agent Workload API socket into workload pods
+#   via a CSI volume (see deploy/spire/sample-workload.yaml), instead of a
+#   hand-rolled hostPath volume mount.

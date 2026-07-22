@@ -1,0 +1,136 @@
+# Throwaway sample workload for Phase 0 SPIRE verification (issue #1).
+#
+# This is NOT a TrustLoop component -- it exists purely so hack/spire/setup.sh
+# has something real to point the K8s workload attestor at: a namespace +
+# service account that a registration entry's selectors can match, and a pod
+# that can prove (from the inside, as the workload itself) that it actually
+# received a SPIRE-issued SVID -- not just that the server thinks it should.
+#
+# Both containers below use the official spire-agent image (matching the
+# server/agent app version pinned in deploy/spire/values.yaml) -- not because
+# this pod runs an agent, but because that image ships the `spire-agent` CLI,
+# which is a real Workload API *client*: the same code path any real workload
+# would use to fetch its own SVID, talking to the agent over the Unix socket
+# the SPIFFE CSI driver mounts in below. Nothing here reimplements identity
+# issuance (see trustloop/CLAUDE.md) -- it only calls the official client.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trustloop-sample
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sample-workload
+  namespace: trustloop-sample
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-workload
+  namespace: trustloop-sample
+  labels:
+    app: sample-workload
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-workload
+  template:
+    metadata:
+      labels:
+        app: sample-workload
+    spec:
+      serviceAccountName: sample-workload
+      # This image has no shell -- it's just the spire-agent binary --
+      # so the fetch and the long-running "keep this pod up" process have
+      # to be two containers rather than one shell one-liner.
+      initContainers:
+        - name: fetch-svid
+          image: ghcr.io/spiffe/spire-agent:1.15.1
+          # One-shot fetch: connects to the Workload API, gets this pod's
+          # SVID (proving K8s workload attestation just succeeded), and
+          # writes the actual X.509 cert/key/bundle PEM files to a shared
+          # emptyDir so hack/spire/setup.sh can `kubectl cp` the certificate
+          # itself back out for inspection -- not just take the CLI's word
+          # for it. Also prints SPIFFE ID + validity to its own pod logs
+          # (`kubectl logs -c fetch-svid`).
+          command:
+            - /opt/spire/bin/spire-agent
+            - api
+            - fetch
+            - x509
+            - -socketPath=/spiffe-workload-api/spire-agent.sock
+            - -write=/svid
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+            - name: svid-data
+              mountPath: /svid
+      containers:
+        - name: watch-svid
+          image: ghcr.io/spiffe/spire-agent:1.15.1
+          # `api watch` attaches to the Workload API and blocks, printing
+          # every SVID update it receives (initial issuance, then rotations)
+          # -- this both keeps the pod alive (so the emptyDir written above
+          # stays reachable via `kubectl cp`/`kubectl exec`) and gives a
+          # second, independent, continuously-live proof of issuance via
+          # `kubectl logs -c watch-svid`, distinct from the one-shot fetch.
+          command:
+            - /opt/spire/bin/spire-agent
+            - api
+            - watch
+            - -socketPath=/spiffe-workload-api/spire-agent.sock
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+            - name: svid-data
+              mountPath: /svid
+        - name: holder
+          # The spire-agent image (used above) is scratch-based -- no shell,
+          # no tar -- which is great for a minimal image but means `kubectl
+          # cp`/`kubectl exec ... cat` can't pull the fetched SVID files back
+          # out of it (kubectl cp shells out to `tar` inside the target
+          # container). This tiny busybox sidecar shares the same svid-data
+          # emptyDir purely so hack/spire/setup.sh's verification step has a
+          # container it can `kubectl cp` the certificate out of. It never
+          # touches the Workload API socket itself -- it's plumbing for
+          # verification, not part of the identity path.
+          image: busybox:1.36
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            - name: svid-data
+              mountPath: /svid
+              readOnly: true
+      volumes:
+        # The SPIFFE CSI driver (installed by the spire chart, see
+        # deploy/spire/values.yaml) mounts the spire-agent Workload API
+        # socket for this node into the pod -- the chart's own documented
+        # pattern for wiring a workload up to its agent, not a hand-rolled
+        # hostPath mount. The socket ends up at
+        # /spiffe-workload-api/spire-agent.sock inside the container.
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
+        # Shared between the init container (writer) and main container
+        # (holder) so the fetched SVID PEM files outlive the one-shot fetch
+        # and stay reachable for verification.
+        - name: svid-data
+          emptyDir: {}
