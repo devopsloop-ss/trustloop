@@ -93,26 +93,40 @@ This:
    the pod and inspecting it with `openssl x509` — proving a real SVID was
    issued to the workload, not just that the server thinks it should be.
 
-### Local gateway scaffold (Phase 1)
+### Local gateway (Phase 1)
 
-The gateway (`cmd/gateway`) is the piece the rest of TrustLoop's Phase 1
-work builds on: it fetches its own SPIRE-issued identity via the SPIFFE
-Workload API and terminates SPIFFE/mTLS connections, correctly extracting
-the caller's SPIFFE ID for a valid peer and refusing a peer that doesn't
-present one (no certificate, a self-signed cert, or a cert for a trust
-domain this gateway doesn't trust). See [CLAUDE.md](CLAUDE.md) — this repo
-does not implement identity issuance or X.509/TLS trust decisions itself;
-every accept/reject decision here is made by the official
-[go-spiffe](https://github.com/spiffe/go-spiffe) SDK. The OpenFGA
-authorization check and structured allow/deny audit log are separate,
-later work (see [ROADMAP.md](ROADMAP.md) Phase 1) — this scaffold is
-identity extraction only.
+The gateway (`cmd/gateway`) is the enforcement point the rest of TrustLoop's
+Phase 1 work builds on. For every connection it:
 
-Requires SPIRE already running locally (`hack/spire/setup.sh`, above), plus
-`docker` (to build the gateway's image) and `k3d` (to load it into the
-cluster with no registry involved). Builds the gateway, deploys it via its
-own Helm chart ([deploy/gateway/chart](deploy/gateway/chart)), and proves
-the accept/reject behavior against the live cluster (one command):
+1. Fetches its own SPIRE-issued identity via the SPIFFE Workload API and
+   terminates SPIFFE/mTLS connections, correctly extracting the caller's
+   SPIFFE ID for a valid peer and refusing a peer that doesn't present one
+   (no certificate, a self-signed cert, or a cert for a trust domain this
+   gateway doesn't trust). See [CLAUDE.md](CLAUDE.md) — this repo does not
+   implement identity issuance or X.509/TLS trust decisions itself; every
+   accept/reject decision here is made by the official
+   [go-spiffe](https://github.com/spiffe/go-spiffe) SDK.
+2. Checks the caller's identity against a real OpenFGA `Check` call
+   (`internal/authz`) for the `can_call` relation from
+   [deploy/openfga/model.fga](deploy/openfga/model.fga), against the
+   requested tool — again, the actual allow/deny decision is made by
+   OpenFGA, not by this repo.
+3. Writes a structured (ndjson) audit log entry (`internal/audit`) for
+   *every* decision, allow and deny alike, with who, what, when, and why —
+   see that package's doc comment for the exact schema and how it's a
+   deliberate stepping stone toward [ROADMAP.md](ROADMAP.md) Phase 4's
+   queryable audit log.
+
+Requires SPIRE and OpenFGA already running locally (`hack/spire/setup.sh`
+and `hack/openfga/setup.sh`, above), plus `docker` (to build the gateway's
+image) and `k3d` (to load it into the cluster with no registry involved).
+Builds the gateway, deploys it via its own Helm chart
+([deploy/gateway/chart](deploy/gateway/chart)), and proves both the
+identity accept/reject behavior and the OpenFGA-backed allow/deny behavior
+against the live cluster — including writing a real, granted `can_call`
+tuple into the same OpenFGA store `hack/openfga/setup.sh` created, and
+proving both a genuinely granted and a genuinely ungranted tool call behave
+correctly — (one command):
 
 ```sh
 hack/gateway/setup.sh
