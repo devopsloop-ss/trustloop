@@ -16,8 +16,9 @@
 # it doesn't replace any part of it.
 #
 # This is Phase 0 scope only -- get SPIRE issuing real SVIDs to a sample
-# workload via K8s workload attestation, repeatably, on the local
-# trustloop-dev k3d cluster. Deliberately NOT production config:
+# workload via K8s workload attestation, repeatably, on the shared local
+# minikube cluster (see hack/dev-cluster.sh). Deliberately NOT production
+# config:
 
 global:
   spire:
@@ -32,8 +33,11 @@ global:
 
     # Purely a label SPIRE stamps into k8s_psat agent SPIFFE IDs
     # (spiffe://<trustDomain>/spire/agent/k8s_psat/<clusterName>/<node-id>).
-    # Matches the k3d cluster name (trustloop-dev, see hack/spire/setup.sh)
-    # so the agent's own identity is legible at a glance.
+    # An arbitrary identifier agreed between server and agent (both read it
+    # from this one value), not the Kubernetes cluster's actual name --
+    # "trustloop-dev" names TrustLoop's dev SPIRE deployment, legible at a
+    # glance even though it now runs on the shared "minikube" profile
+    # (originally it also matched the old per-repo k3d cluster's name).
     clusterName: trustloop-dev
 
     namespaces:
@@ -114,7 +118,7 @@ spiffe-oidc-discovery-provider:
 #   long-lived credentials" rule -- same spirit: don't skip a trust check in
 #   anything meant to run for real). A production cluster should configure
 #   `hostCert` or `apiServerCA` verification instead. It's safe here because
-#   trustloop-dev is a single-node local k3d cluster only this machine can
+#   this is a single-node local minikube cluster only this machine can
 #   reach -- there's no other tenant's kubelet to be spoofed.
 #
 # spiffe-csi-driver.enabled: true (default)

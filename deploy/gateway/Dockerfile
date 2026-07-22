@@ -1,7 +1,7 @@
 # Container image for the TrustLoop gateway scaffold (issue #3).
 #
 # Per trustloop/CLAUDE.md: "later this repo's own gateway all get installed
-# via their official Helm chart (or ours, if none exists) into a local k3d
+# via their official Helm chart (or ours, if none exists) into the local
 # cluster -- from day one." This is that first "ours" -- deploy/gateway/chart
 # installs the image this Dockerfile builds. There is no official upstream
 # chart/image for TrustLoop's own gateway (it's this repo's product), so

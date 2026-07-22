@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Brings up OpenFGA on a local k3d cluster via Helm, loads the TrustLoop
-# Phase 0 authorization model, writes test tuples, and runs verification
-# checks against it.
+# Brings up OpenFGA on the shared local minikube cluster via Helm, loads the
+# TrustLoop Phase 0 authorization model, writes test tuples, and runs
+# verification checks against it.
 #
 # This is the one documented, repeatable path referenced by ROADMAP.md
 # Phase 0 -- "OpenFGA running locally... installed via helm install, not
@@ -12,8 +12,18 @@
 #
 # Per trustloop/CLAUDE.md: Helm, not docker-compose or hand-rolled install
 # scripts, for anything cluster-deployed. This script's job is orchestrating
-# k3d + helm + kubectl -- it does not reimplement what any of those tools
-# already do.
+# minikube + helm + kubectl -- it does not reimplement what any of those
+# tools already do.
+#
+# The cluster is the SHARED default minikube profile (see
+# hack/dev-cluster.sh for the full story -- it replaced the per-repo
+# `trustloop-dev` k3d cluster when Docker Desktop was retired). TrustLoop
+# owns the `openfga` namespace on it; topoloop owns `argo`. Every
+# kubectl/helm call below pins --context/--kube-context explicitly rather
+# than relying on ambient current-context state -- the kubeconfig
+# current-context is shared, mutable, host-wide state, and something else on
+# the machine switching it between two commands here would otherwise
+# silently point a later command at the wrong cluster.
 #
 # Usage: hack/openfga/setup.sh
 #   (run from anywhere -- it cd's to the repo root itself)
@@ -22,16 +32,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-cluster_name="trustloop-dev"
-# k3d's default k3s image (whatever the installed k3d version currently
-# resolves as "latest") has been observed to crash-loop on startup in this
-# environment shortly after the API server comes up (etcd/kine context
-# canceled seconds in) -- while the older v1.30.6-k3s1 used by Topoloop's
-# cluster is stable. Pin to that same known-good version rather than
-# "latest": it's also the same version ROADMAP.md's "matching Topoloop's
-# local target" already asks for, so this isn't a workaround bolted on top
-# of the goal, it *is* the goal.
-k3s_image="rancher/k3s:v1.30.6-k3s1"
+kube_context="minikube"
 
 chart_repo_url="https://openfga.github.io/helm-charts"
 chart_ref="openfga/openfga"
@@ -43,19 +44,17 @@ release_name="openfga"
 namespace="openfga"
 values_file="deploy/openfga/values.yaml"
 
-echo "== ensuring k3d cluster '$cluster_name' exists =="
-if k3d cluster list -o json | grep -q "\"name\":\"${cluster_name}\""; then
-  echo "cluster '$cluster_name' already exists -- reusing it"
-else
-  k3d cluster create "$cluster_name" --image "$k3s_image" --wait --timeout 180s
-fi
-kubectl config use-context "k3d-${cluster_name}" >/dev/null
+kctl() { kubectl --context "$kube_context" "$@"; }
+
+echo "== ensuring the shared minikube cluster is up =="
+hack/dev-cluster.sh
 
 echo
 echo "== installing OpenFGA (helm, chart ${chart_ref}@${chart_version}) =="
 helm repo add openfga "$chart_repo_url" >/dev/null 2>&1 || true
 helm repo update openfga >/dev/null
 helm upgrade --install "$release_name" "$chart_ref" \
+  --kube-context "$kube_context" \
   --version "$chart_version" \
   --namespace "$namespace" --create-namespace \
   -f "$values_file" \
@@ -63,7 +62,7 @@ helm upgrade --install "$release_name" "$chart_ref" \
 
 echo
 echo "== waiting for OpenFGA pod readiness =="
-kubectl -n "$namespace" wait --for=condition=ready pod \
+kctl -n "$namespace" wait --for=condition=ready pod \
   -l "app.kubernetes.io/instance=${release_name}" --timeout=120s
 
 echo
@@ -73,7 +72,7 @@ echo "== port-forwarding OpenFGA HTTP API to localhost:8080 =="
 # cmd/openfga-verify (and anyone poking at the API by hand afterwards) needs
 # a live localhost:8080 to talk to, same as the old docker-compose setup
 # gave for free via published container ports.
-kubectl -n "$namespace" port-forward "svc/${release_name}" 8080:8080 8081:8081 3000:3000 \
+kctl -n "$namespace" port-forward "svc/${release_name}" 8080:8080 8081:8081 3000:3000 \
   >/tmp/trustloop-openfga-port-forward.log 2>&1 &
 pf_pid=$!
 
@@ -107,4 +106,5 @@ echo "OpenFGA HTTP API:  http://localhost:8080"
 echo "OpenFGA Playground: http://localhost:3000/playground"
 echo "Port-forward is still running in the background (pid $pf_pid)."
 echo "Stop it with: kill $pf_pid"
-echo "Tear down the cluster entirely with: k3d cluster delete $cluster_name"
+echo "Tear down TrustLoop's OpenFGA (the cluster is SHARED with topoloop -- never 'minikube delete' just for this) with:"
+echo "  helm --kube-context $kube_context uninstall $release_name -n $namespace && kubectl --context $kube_context delete namespace $namespace"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Brings up SPIRE (server + agent) on a local k3d cluster via Helm, creates
+# Brings up SPIRE (server + agent) on the shared local minikube cluster via
+# Helm, creates
 # a registration entry for a sample workload using the K8s workload attestor
 # (namespace/service-account selectors, not a hand-typed workload ID), and
 # verifies -- for real, not just "helm install succeeded" -- that the sample
@@ -16,7 +17,7 @@
 #
 # Per trustloop/CLAUDE.md: Helm, not hand-rolled install scripts, for
 # anything cluster-deployed. This script's job is orchestrating
-# k3d + helm + kubectl -- SPIRE server/agent themselves come entirely from
+# minikube + helm + kubectl -- SPIRE server/agent themselves come entirely from
 # the official chart; this script only configures them (see
 # deploy/spire/values.yaml) and writes one registration entry, the same way
 # hack/openfga/setup.sh writes tuples into an already-Helm-installed OpenFGA
@@ -24,12 +25,12 @@
 #
 # Every kubectl/helm call below pins --context/--kube-context explicitly
 # (rather than relying on `kubectl config use-context` + ambient state).
-# This workspace commonly has more than one k3d cluster around (e.g.
-# Topoloop's), and the current-context is shared, mutable, host-wide state
-# -- something else on the machine changing it between two commands in this
-# script would otherwise silently point a later command (e.g. `helm
-# install`) at the wrong cluster. Explicit --context makes that impossible
-# instead of just unlikely.
+# This workspace has had more than one cluster context around before, and
+# the current-context is shared, mutable, host-wide state -- something else
+# on the machine changing it between two commands in this script would
+# otherwise silently point a later command (e.g. `helm install`) at the
+# wrong cluster. Explicit --context makes that impossible instead of just
+# unlikely.
 #
 # Usage: hack/spire/setup.sh
 #   (run from anywhere -- it cd's to the repo root itself)
@@ -48,13 +49,11 @@ export MSYS_NO_PATHCONV=1
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-cluster_name="trustloop-dev"
-kube_context="k3d-${cluster_name}"
-# Same pin, same reason as hack/openfga/setup.sh: k3d's default/"latest" k3s
-# image has been observed to crash-loop on startup on this machine's Docker
-# Desktop/WSL2 backend; this older version is stable. Also matches
-# Topoloop's local dev target, per ROADMAP.md.
-k3s_image="rancher/k3s:v1.30.6-k3s1"
+# The shared default minikube profile -- see hack/dev-cluster.sh for why
+# this replaced the per-repo `trustloop-dev` k3d cluster (and why the old
+# k3s image pin this script used to carry is gone with it: the minikube VM
+# image controls its own runtime/cgroup setup).
+kube_context="minikube"
 
 chart_repo_url="https://spiffe.github.io/helm-charts-hardened/"
 chart_repo="spire"
@@ -89,14 +88,10 @@ sample_spiffe_id="spiffe://${trust_domain}/ns/${sample_namespace}/sa/${sample_se
 
 kctl() { kubectl --context "$kube_context" "$@"; }
 
-echo "== ensuring k3d cluster '$cluster_name' exists =="
-if k3d cluster list -o json | grep -q "\"name\":\"${cluster_name}\""; then
-  echo "cluster '$cluster_name' already exists -- reusing it"
-else
-  k3d cluster create "$cluster_name" --image "$k3s_image" --wait --timeout 180s
-fi
-# Sanity-check the context k3d registered actually points at this cluster,
-# rather than assuming the name convention held.
+echo "== ensuring the shared minikube cluster is up =="
+hack/dev-cluster.sh
+# Sanity-check the context actually answers, rather than assuming
+# dev-cluster.sh's success implies this shell can reach it too.
 kctl cluster-info >/dev/null
 
 echo
@@ -181,8 +176,8 @@ echo "== creating the registration entry for the sample workload =="
 # confirmed above) -- required by SPIRE so it knows which agent(s) are
 # allowed to serve this entry to workloads on their node. We look the
 # agent's own SPIFFE ID up live, from `agent list` output, rather than
-# hand-typing a node identifier that would drift the moment k3d recreates
-# the node.
+# hand-typing a node identifier that would drift the moment the cluster VM
+# is recreated.
 agent_spiffe_id="$(spire_server_bin agent list | grep 'SPIFFE ID' | head -1 | sed -E 's/^SPIFFE ID\s*:\s*//')"
 if [ -z "$agent_spiffe_id" ]; then
   echo "could not determine the attested agent's SPIFFE ID from 'spire-server agent list'" >&2
@@ -235,4 +230,7 @@ echo "Sample workload SPIFFE ID: $sample_spiffe_id"
 echo "Re-inspect any time with:"
 echo "  kubectl --context $kube_context -n spire-server exec $spire_server_pod -- /opt/spire/bin/spire-server entry show -spiffeID $sample_spiffe_id"
 echo "  kubectl --context $kube_context -n $sample_namespace logs deploy/sample-workload -c watch-svid"
-echo "Tear down the cluster entirely with: k3d cluster delete $cluster_name"
+echo "Tear down TrustLoop's SPIRE (the cluster is SHARED with topoloop -- never 'minikube delete' just for this) with:"
+echo "  helm --kube-context $kube_context uninstall $release_name -n $release_namespace"
+echo "  helm --kube-context $kube_context uninstall $crds_release_name -n $crds_release_namespace"
+echo "  kubectl --context $kube_context delete namespace $release_namespace $sample_namespace"

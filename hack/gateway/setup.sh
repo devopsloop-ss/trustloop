@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds the TrustLoop gateway scaffold (issue #3), deploys it to the local
-# k3d cluster via its own Helm chart, and proves -- for real, against a live
+# Builds the TrustLoop gateway scaffold (issue #3), deploys it to the shared
+# local minikube cluster via its own Helm chart, and proves -- for real, against a live
 # SPIRE deployment, not just unit tests -- that it correctly extracts the
 # SPIFFE identity of a peer presenting a real SPIRE-issued SVID, and
 # correctly rejects a peer that doesn't present one.
@@ -10,21 +10,25 @@
 # nothing here is a one-off command typed into a terminal and forgotten.
 #
 # What this script does, in order:
-#   1. Reuses (or creates) the trustloop-dev k3d cluster.
-#   2. Runs hack/spire/setup.sh -- idempotent and safe to re-run -- to
-#      guarantee SPIRE server+agent are up AND the sample workload
+#   1. Runs hack/spire/setup.sh -- idempotent and safe to re-run -- which
+#      ensures the shared minikube cluster is up (via hack/dev-cluster.sh)
+#      and guarantees SPIRE server+agent are up AND the sample workload
 #      (trustloop-sample/sample-workload) has its registration entry. This
 #      script's "valid peer" verification reuses that identity rather than
 #      minting a second one (see deploy/gateway/verify-job.yaml).
-#   3. Creates a SPIRE registration entry for the gateway itself
+#   2. Creates a SPIRE registration entry for the gateway itself
 #      (k8s:ns:trustloop-gateway, k8s:sa:gateway) -- the gateway's OWN
 #      identity, distinct from the sample workload's.
-#   4. Cross-compiles cmd/gateway and cmd/gateway-verify for linux/amd64,
-#      builds a container image (deploy/gateway/Dockerfile), and loads it
-#      into the k3d cluster with `k3d image import` -- no registry involved.
-#   5. Installs deploy/gateway/chart via Helm (per trustloop/CLAUDE.md:
+#   3. Cross-compiles cmd/gateway and cmd/gateway-verify for linux/amd64,
+#      then builds the container image (deploy/gateway/Dockerfile) with
+#      `minikube image build` -- the build runs against the Docker daemon
+#      INSIDE the minikube VM, so the image lands directly in the cluster's
+#      image store with no registry and no Docker Desktop on the host
+#      involved (Docker Desktop is retired -- see CLAUDE.md; this replaces
+#      the old host-side `docker build` + `k3d image import` pair).
+#   4. Installs deploy/gateway/chart via Helm (per trustloop/CLAUDE.md:
 #      Helm, not hand-rolled kubectl, for this repo's own gateway too).
-#   6. Runs deploy/gateway/verify-job.yaml (kubectl apply, not part of the
+#   5. Runs deploy/gateway/verify-job.yaml (kubectl apply, not part of the
 #      Helm release -- a throwaway verification fixture, same pattern as
 #      deploy/spire/sample-workload.yaml) and prints its PASS/FAIL output.
 #      Exits non-zero if the Job failed or any check inside it failed.
@@ -43,8 +47,18 @@ export MSYS_NO_PATHCONV=1
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-cluster_name="trustloop-dev"
-kube_context="k3d-${cluster_name}"
+# The shared default minikube profile -- see hack/dev-cluster.sh.
+kube_context="minikube"
+
+# `minikube image build` below needs the same MINIKUBE_HOME the cluster was
+# created with or it won't find the profile (hack/dev-cluster.sh defaults it
+# the same way for the same reason; duplicated here because that script runs
+# as a child process, so its export can't reach us).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    export MINIKUBE_HOME="${MINIKUBE_HOME:-D:\\minikube}"
+    ;;
+esac
 
 trust_domain="trustloop-dev.local"          # matches deploy/spire/values.yaml
 gateway_namespace="trustloop-gateway"
@@ -63,9 +77,9 @@ kctl() { kubectl --context "$kube_context" "$@"; }
 
 echo "== ensuring SPIRE (server/agent) and the sample workload's registration entry exist =="
 # hack/spire/setup.sh is idempotent -- safe to run every time this script
-# runs, not just the first time. This is also what creates/reuses the
-# trustloop-dev k3d cluster itself, so this script doesn't duplicate that
-# logic.
+# runs, not just the first time. It also ensures the shared minikube cluster
+# itself is up (via hack/dev-cluster.sh), so this script doesn't duplicate
+# that logic.
 hack/spire/setup.sh
 
 echo
@@ -77,8 +91,8 @@ spire_server_bin() {
 
 # Same reasoning as hack/spire/setup.sh's sample-workload entry: pin
 # -parentID to the already-attested agent's own SPIFFE ID, looked up live
-# rather than hand-typed, so it can't silently drift from whatever node k3d
-# actually created.
+# rather than hand-typed, so it can't silently drift from whatever node the
+# cluster actually has.
 agent_spiffe_id="$(spire_server_bin agent list | grep 'SPIFFE ID' | head -1 | sed -E 's/^SPIFFE ID\s*:\s*//')"
 if [ -z "$agent_spiffe_id" ]; then
   echo "could not determine the attested agent's SPIFFE ID from 'spire-server agent list'" >&2
@@ -106,21 +120,60 @@ echo "== building the gateway image (cross-compiled linux/amd64, no registry) ==
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
+# On Windows/Git Bash, mktemp returns an MSYS-style path (/tmp/...) that
+# only MSYS-aware programs resolve correctly -- NATIVE Windows binaries
+# (go.exe, minikube.exe) would interpret /tmp/... relative to the current
+# drive (i.e. C:\tmp\...), silently splitting "the same directory" into two
+# different real locations. Normally MSYS auto-converts path arguments
+# before native programs see them, but this script exports
+# MSYS_NO_PATHCONV=1 (needed for the in-container paths above), so that
+# safety net is off. Convert once, explicitly, to the mixed form
+# (C:/Users/...) that native tools accept, and hand THAT to every native
+# tool below; no-op on Linux/macOS where cygpath doesn't exist. (This is
+# not hypothetical: the old k3d-era version of this script had exactly this
+# split and got away with it only because go.exe and docker.exe happened to
+# mis-resolve /tmp to the same wrong place, C:\tmp.)
+if command -v cygpath >/dev/null 2>&1; then
+  work_dir_native="$(cygpath -m "$work_dir")"
+else
+  work_dir_native="$work_dir"
+fi
+
 echo "-- compiling cmd/gateway and cmd/gateway-verify for linux/amd64 --"
 # Cross-compiled from the host rather than built inside the Docker image:
 # this repo's go.sum already has everything these binaries need in the
 # local module cache (from `go build ./...` during development), so this
 # avoids a `go mod download` step inside the image build needing network
-# access, and keeps the Docker build itself trivial (see
+# access, and keeps the image build itself trivial (see
 # deploy/gateway/Dockerfile).
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${work_dir}/gateway" ./cmd/gateway
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${work_dir}/gateway-verify" ./cmd/gateway-verify
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${work_dir_native}/gateway" ./cmd/gateway
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${work_dir_native}/gateway-verify" ./cmd/gateway-verify
 
-echo "-- docker build =="
-docker build -t "$image_name" -f deploy/gateway/Dockerfile "$work_dir"
+echo "-- minikube image build (builds against the Docker daemon inside the minikube VM) --"
+# There is no Docker daemon on the host any more (Docker Desktop retired --
+# see CLAUDE.md), so the image can't be `docker build`-then-loaded like the
+# old k3d flow. Instead, `minikube image build` ships the build context into
+# the minikube VM and builds there, which means the finished image is
+# already IN the cluster's image store -- the build and the "load into the
+# cluster" step the old k3d flow needed are one operation now.
+#
+# The Dockerfile is copied INTO the build context (rather than passed via
+# -f): minikube transfers exactly one directory into the VM, and keeping the
+# Dockerfile inside it sidesteps any host-path/VM-path mismatch for the -f
+# argument.
+cp deploy/gateway/Dockerfile "${work_dir}/Dockerfile"
+minikube image build -t "$image_name" "$work_dir_native"
 
-echo "-- k3d image import (loads the image straight into the cluster's containerd, no registry) =="
-k3d image import "$image_name" -c "$cluster_name"
+# `minikube image build` has been observed to exit 0 even when the build
+# inside the VM FAILED (the failure only shows in the streamed buildkit
+# output) -- so "the command returned" is not proof the image exists, and
+# without this check the failure would surface later as a confusing Helm
+# --wait timeout on an ImageNeverPull pod instead of here, at the actual
+# cause. Ask the cluster's image store directly.
+if ! minikube image ls | grep -qF "$image_name"; then
+  echo "image build failed: '$image_name' is not present in the cluster's image store (see build output above)" >&2
+  exit 1
+fi
 
 echo
 echo "== installing the gateway (helm, this repo's own chart: ${chart_dir}) =="
@@ -175,4 +228,5 @@ fi
 echo "Gateway SPIFFE ID: $gateway_spiffe_id"
 echo "Re-run just the verification with:"
 echo "  kubectl --context $kube_context -n $sample_namespace delete job gateway-verify --ignore-not-found && kubectl --context $kube_context apply -f $verify_job_manifest"
-echo "Tear down the cluster entirely with: k3d cluster delete $cluster_name"
+echo "Tear down the gateway (the cluster is SHARED with topoloop -- never 'minikube delete' just for this) with:"
+echo "  helm --kube-context $kube_context uninstall gateway -n $gateway_namespace && kubectl --context $kube_context delete namespace $gateway_namespace"

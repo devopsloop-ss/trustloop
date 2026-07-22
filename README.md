@@ -32,9 +32,26 @@ OpenFGA is the authorization engine for the `User -> can_act_on_behalf_of -> Age
 and `Agent -> can_call -> Tool` delegation model (see [ROADMAP.md](ROADMAP.md)).
 This repo does not implement authorization itself — see [CLAUDE.md](CLAUDE.md).
 
-Requires `k3d`, `helm`, and `kubectl` locally (matching Topoloop's local dev
-target — see [CLAUDE.md](CLAUDE.md)). Bring OpenFGA up on a local k3d
-cluster, load the model, and verify it behaves correctly (one command):
+Requires `minikube`, `helm`, and `kubectl` locally (matching Topoloop's
+local dev target — see [CLAUDE.md](CLAUDE.md)). Local Kubernetes is
+**minikube with the Hyper-V driver** on Windows (Docker Desktop and k3d were
+retired 2026-07-22 — see CLAUDE.md), which means:
+
+- Hyper-V enabled, and your user in the **Hyper-V Administrators** group
+  (`minikube` lifecycle commands manage a Hyper-V VM; plain `kubectl`/`helm`
+  need no special rights). Group membership takes effect at next sign-in.
+- `MINIKUBE_HOME=D:\minikube` — the VM image/profile state live on D:
+  (C: is nearly full). The setup scripts default this themselves on Windows;
+  set it in your own shell too if you run `minikube` by hand, or minikube
+  won't find the existing profile and will try to create a new VM.
+- The cluster is the **default `minikube` profile, shared with Topoloop**
+  (namespace-separated: Topoloop owns `argo`; TrustLoop owns `openfga`,
+  `spire-server`, `trustloop-sample`, `trustloop-gateway`). Don't create a
+  per-repo profile, and never `minikube delete` just for this repo — see
+  [hack/dev-cluster.sh](hack/dev-cluster.sh).
+
+Bring OpenFGA up on the shared local minikube cluster, load the model, and
+verify it behaves correctly (one command):
 
 ```sh
 hack/openfga/setup.sh
@@ -42,7 +59,7 @@ hack/openfga/setup.sh
 
 This:
 
-1. Creates a local k3d cluster named `trustloop-dev` if one doesn't already exist (reuses it if it does).
+1. Ensures the shared minikube cluster is up ([hack/dev-cluster.sh](hack/dev-cluster.sh) — starts it if needed, reuses it if running).
 2. Installs OpenFGA via its official Helm chart ([deploy/openfga/values.yaml](deploy/openfga/values.yaml) pins the chart to a specific version — see that file for why, and why `replicaCount: 1` matters with the in-memory datastore).
 3. Port-forwards the OpenFGA HTTP API to `localhost:8080`.
 4. Runs [cmd/openfga-verify](cmd/openfga-verify) which:
@@ -64,9 +81,9 @@ identity issuance itself — see [CLAUDE.md](CLAUDE.md).
 
 Also requires `openssl` locally (used only to inspect the workload's fetched
 certificate as part of verification — never to issue or handle anything
-identity-related itself). Bring SPIRE up on the same local k3d cluster,
-create a registration entry for a throwaway sample workload, and verify it
-actually receives a real SVID (one command):
+identity-related itself). Bring SPIRE up on the same shared minikube
+cluster, create a registration entry for a throwaway sample workload, and
+verify it actually receives a real SVID (one command):
 
 ```sh
 hack/spire/setup.sh
@@ -74,8 +91,8 @@ hack/spire/setup.sh
 
 This:
 
-1. Reuses the local `trustloop-dev` k3d cluster (created by
-   `hack/openfga/setup.sh` if it doesn't already exist).
+1. Ensures the shared minikube cluster is up (same
+   [hack/dev-cluster.sh](hack/dev-cluster.sh) as `hack/openfga/setup.sh`).
 2. Installs SPIRE server + agent via the official `spiffe/spire` Helm chart
    ([deploy/spire/values.yaml](deploy/spire/values.yaml) pins the chart to a
    specific version and documents every non-default setting — trust domain,
@@ -118,8 +135,11 @@ Phase 1 work builds on. For every connection it:
    queryable audit log.
 
 Requires SPIRE and OpenFGA already running locally (`hack/spire/setup.sh`
-and `hack/openfga/setup.sh`, above), plus `docker` (to build the gateway's
-image) and `k3d` (to load it into the cluster with no registry involved).
+and `hack/openfga/setup.sh`, above). No Docker on the host is needed: the
+gateway binary is cross-compiled locally (`go build`) and the image is
+built with `minikube image build` against the Docker daemon *inside* the
+minikube VM, landing it directly in the cluster's image store with no
+registry involved.
 Builds the gateway, deploys it via its own Helm chart
 ([deploy/gateway/chart](deploy/gateway/chart)), and proves both the
 identity accept/reject behavior and the OpenFGA-backed allow/deny behavior
@@ -132,8 +152,7 @@ correctly — (one command):
 hack/gateway/setup.sh
 ```
 
-Tear it down with:
-
-```sh
-k3d cluster delete trustloop-dev
-```
+Tear it down with `helm uninstall` / `kubectl delete namespace` on
+TrustLoop's own namespaces (each setup script prints the exact commands for
+its component when it finishes) — **not** `minikube delete`, which would
+also destroy Topoloop's half of the shared cluster.
